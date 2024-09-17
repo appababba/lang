@@ -1,0 +1,99 @@
+import Data.Maybe (fromMaybe)
+import Data.List (foldl')
+import Data.Char (isUpper)
+import Control.Monad (replicateM)
+
+{-
+accept :: CFG -> [Char] -> Bool
+accept (s,d) = elem [] . foldl' (\xs c -> concatMap (lq c) xs) [[s]] where
+  lq a [] = []
+  lq a (x:xs) | isUpper x = map (++ xs) $ d x a          -- nonterminal
+              | otherwise = if a == x then [xs] else []  -- terminal
+-} 
+type CFG = (Char, Char -> Char -> [String])
+
+-- part 1
+
+isValid :: String -> Bool
+isValid "" = True
+isValid s
+  | head s == 'a' && last s == 'b' = isValid $ init $ tail s
+  | head s == 'b' && last s == 'a' = isValid $ init $ tail s
+  | otherwise = any isValidSplit [1..length s - 1]
+  where
+    isValidSplit i = isValid (take i s) && isValid (drop i s)
+
+
+sGrammar :: CFG
+sGrammar = ('S', d) where
+  d 'S' 'a' = ["Sb"]  
+  d 'S' 'b' = ["Sa"]  
+  d 'S' _   = []  
+
+-- let strings n = concatMap (\i -> replicateM i "ab") [0..n]
+-- let testStrings = strings 10
+-- mapM_ (\str -> putStrLn $ str ++ ": CFG -> " ++ show (accept sGrammar str) ++ ", isValid -> " ++ show (isValid str)) testStrings
+
+
+
+-- part 2
+data Dir = L | R
+
+-- Result of a transition (a is state type)
+data Res a = Reject | Accept | Step a Char Dir
+
+-- Turing machine M = (Q, s, d)
+type TM a = ([a], a, a -> Char -> Res a)
+
+-- xs in [a^i b^i c^i | i in [0..]]
+abc :: String -> Bool
+abc xs = let n = length $ takeWhile (=='a') xs
+             block x = replicate n x
+         in xs == concatMap block "abc"
+
+-- All strings on alphabet {a,b,c} of length n or less
+strings :: Int -> [String]
+strings n = concat [strs i | i <- [0..n]] where
+  strs 0 = [""]
+  strs n = [a:xs | a <- "abc", xs <- strs (n-1)]
+
+-- TM acceptance
+accept :: TM a -> String -> Bool
+accept (qs, s, d) w = run [] s w where
+  -- run as q bs: q is current state, as in reversed left side of tape,
+  -- bs is right side of tape
+  run as q [] = run as q " "  -- reached right end of tape: add blank
+  run as q (b:bs) = case d q b of
+                      Reject -> False
+                      Accept -> True
+                      Step q' a' L -> case as of
+                                        [] -> False  -- tried to move off left end of tape
+                                        x:xs -> run xs q' (x:a':bs)
+                      Step q' a' R -> run (a':as) q' bs
+
+turingMachine :: TM Int
+turingMachine = (states, 0, d)
+  where
+    states = [0,1,2,3,4,5,6]  
+    d 0 ' ' = Step 1 ' ' R
+    d 1 'a' = Step 1 'A' R  
+    d 1 'b' = Step 2 'b' R  
+    d 2 'b' = Step 2 'B' R
+    d 2 'c' = Step 3 'c' R  
+    d 3 'c' = Step 3 'C' L  
+    d 3 ' ' = Step 4 ' ' L  
+    d 4 'A' = Step 4 'A' L  
+    d 4 ' ' = Step 5 ' ' R  
+    d 5 ' ' = Accept        
+    d _ _   = Reject        
+
+
+{-
+strings 0 = [""]
+strings n = [x:xs | x <- "abc", xs <- strings (n-1)]
+testTM = filter (\s -> accept turingMachine s == abc s) (concatMap strings [0..10])
+
+
+-}
+
+
