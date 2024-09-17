@@ -1,0 +1,111 @@
+
+import FLang
+
+
+{-
+a*b*(ab + ba)
+glushkov
+ghci> r = toRE "a*b*.ab.ba.+."
+ghci> Compact r
+a*b*(ab+ba)
+ghci> (qs,ss,fs,d) = glushkov r
+ghci> qs
+[0,1,2,3,4,5,6]
+ghci> ss
+[0,1,2,4]
+ghci> fs
+[6]
+ghci> [(q,a,d q a) | q <- qs, a <- sigma]
+[(0,'a',[0,1,2,4]),(0,'b',[]),(1,'a',[]),(1,'b',[1,2,4]),(2,'a',[3]),(2,'b',[]),(3,'a',[]),(3,'b',[6]),(4,'a',[]),(4,'b',[5]),(5,'a',[6]),(5,'b',[]),(6,'a',[]),(6,'b',[])]
+ghci> (qs, s, fs, d) = reachable $ nfsm_to_fsm $ glushkov r
+ghci> qs
+[[],[0,1,2,3,4],[0,1,2,4],[1,2,4,5],[1,2,4,5,6],[3,6],[6]]
+ghci> s
+[0,1,2,4]
+ghci> [(q,a,d q a) | q <- qs, a <- sigma]                                                  
+[([],'a',[]),([],'b',[]),([0,1,2,3,4],'a',[0,1,2,3,4]),([0,1,2,3,4],'b',[1,2,4,5,6]),([0,1,2,4],'a',[0,1,2,3,4]),([0,1,2,4],'b',[1,2,4,5]),([1,2,4,5],'a',[3,6]),([1,2,4,5],'b',[1,2,4,5]),([1,2,4,5,6],'a',[3,6]),([1,2,4,5,6],'b',[1,2,4,5]),([3,6],'a',[]),([3,6],'b',[6]),([6],'a',[]),([6],'b',[])]
+
+thompson
+ghci> (qs,ss,fs,d,es) = thompson r
+ghci> qs
+[0,1,2,3,4,5,6,7,8,9,10,11,12,13] 
+we got 14 states in the example, correct
+ghci> ss
+[0,3,6,10]
+ghci> fs
+[9,13]
+ghci> (qs,ss,fs,d) = elim_eps $ thompson r
+ghci> qs
+[0,1,2,3,4,5,6,7,8,9,10,11,12,13]
+ghci> ss
+[0,1,3,4,6,10]
+
+
+glushkov (b + ab*a)* has 2 states in the end
+ghci> let r2 = Star (Union b (Cat a (Cat (Star b) a)))
+ghci> Compact r2
+(b+ab*a)*
+ghci> let (qs, ss, fs, d) = glushkov r2                                       
+ghci> qs
+[0,1,2,3,4]
+ghci> ss
+[0,1,4]
+ghci> fs
+[4]
+ghci> [(q,a,d q a) | q <- qs, a <- sigma]
+[(0,'a',[]),(0,'b',[0,1,4]),(1,'a',[2,3]),(1,'b',[]),(2,'a',[]),(2,'b',[2,3]),(3,'a',[0,1,4]),(3,'b',[]),(4,'a',[]),(4,'b',[])]
+ghci> (qs,s,fs,d) = reachable $ nfsm_to_fsm $ glushkov r2
+ghci> qs
+[[0,1,4],[2,3]] correct
+ghci> s
+[0,1,4] correct
+ghci> [(q,a,d q a) | q <- qs, a <- sigma]
+[([0,1,4],'a',[2,3]),([0,1,4],'b',[0,1,4]),([2,3],'a',[0,1,4]),([2,3],'b',[2,3])]
+
+
+(1 + a)(ba)*(1 + b)
+
+ghci> (qs,ss,fs,d) = glushkov expr
+ghci> qs
+[0,1,2,3,4]
+ghci> ss
+[0]
+ghci> fs
+[4]
+ghci> [(q,a,d q a) | q <- qs, a <- sigma]
+[(0,'a',[1,3]),(0,'b',[]),(1,'a',[]),(1,'b',[2]),(2,'a',[1,3]),(2,'b',[]),(3,'a',[]),(3,'b',[4]),(4,'a',[]),(4,'b',[])]
+ghci> (qs,s,fs,d) = reachable $ nfsm_to_fsm $ glushkov expr
+ghci> qs
+[[],[0],[1,3],[2,4]]
+ghci> s
+[0]
+ghci> [(q,a,d q a) | q <- qs, a <- sigma]
+[([],'a',[]),([],'b',[]),([0],'a',[1,3]),([0],'b',[]),([1,3],'a',[]),([1,3],'b',[2,4]),([2,4],'a',[1,3]),([2,4],'b',[])]
+
+ends in ab
+endsAB = Cat (Star (Union (Let 'a') (Let 'b'))) (Cat (Let 'a') (Let 'b'))
+ghci> (qs,ss,fs,d) = glushkov endsAB
+ghci> qs
+[0,1,2,3,4]
+ghci> ss
+[0,1,2]
+ghci> fs
+[4]
+ghci> [(q,a,d q a) | q <- qs, a <- sigma]
+[(0,'a',[0,1,2]),(0,'b',[]),(1,'a',[]),(1,'b',[0,1,2]),(2,'a',[3]),(2,'b',[]),(3,'a',[]),(3,'b',[4]),(4,'a',[]),(4,'b',[])]
+ghci> (qs,s,fs,d) = reachable $ nfsm_to_fsm $ glushkov endsAB
+ghci> qs
+[[0,1,2],[0,1,2,3],[0,1,2,4]]
+ghci> s
+[0,1,2]
+ghci> [(q,a,d q a) | q <- qs, a <- sigma]
+[([0,1,2],'a',[0,1,2,3]),([0,1,2],'b',[0,1,2]),([0,1,2,3],'a',[0,1,2,3]),([0,1,2,3],'b',[0,1,2,4]),([0,1,2,4],'a',[0,1,2,3]),([0,1,2,4],'b',[0,1,2])]
+correct
+
+
+ghci> regex = Cat (Cat (Union (Star Empty) (Let 'a')) (Star (Cat (Let 'b') (Let 'a')))) (Uni)'ghci> let newRegex = fromRE regex
+ghci> bnewRegex = brzozowski newRegex
+ghci> let bnewRegex = brzozowski newRegex
+
+-}
+
