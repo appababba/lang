@@ -1,0 +1,675 @@
+-- Regular Expression functions
+
+import Data.List (sort, inits, tails, stripPrefix, foldl', -- for my code
+                  isPrefixOf, isSuffixOf, isInfixOf)       -- for your code
+
+-- Fixed alphabet, but everything below should work for any sigma!
+sigma :: [Char]
+sigma = "ab"
+
+---------------- General list functions
+
+-- Normalize a list: sort and remove duplicates
+norm :: Ord a => [a] -> [a]
+norm xs = rad $ sort xs where
+  rad :: Eq a => [a] -> [a]  -- Remove adjacent duplicates
+  rad [] = []
+  rad [x] = [x]
+  rad (x:ys@(y:zs)) | x == y = rad ys
+                    | otherwise = x : rad ys
+
+-- Cartesian product, preserves normalization
+cart :: [a] -> [b] -> [(a,b)]
+cart xs ys = [(x,y) | x <- xs, y <- ys]
+
+-- Powerset, preserves normalization
+power :: [a] -> [[a]]
+power [] = [[]]
+power (x:xs) = let ys = power xs
+               in [] : map (x:) ys ++ tail ys
+
+-- Check whether two lists overlap
+overlap :: Eq a => [a] -> [a] -> Bool
+overlap [] ys = False
+overlap (x:xs) ys = elem x ys || overlap xs ys
+
+-- splits xs = list of all possible splits of xs, in order. For example,
+-- splits "abc" = [("","abc"), ("a","bc"), ("ab","c"), ("abc","")]
+splits :: [a] -> [([a], [a])]
+splits xs = zip (inits xs) (tails xs)
+
+
+
+---------------- Length-ordered lists
+
+-- Length-Ordered Lists over "character type" a (aka "strings")
+-- Invariant: In LOL n xs, n == length xs
+data LOL a = LOL Int [a] deriving (Eq,Ord)
+
+-- Show instance doesn't print LOL constructor or length
+instance Show a => Show (LOL a) where
+  show (LOL n xs) = show xs
+
+-- Empty list (epsilon)
+eps :: LOL a
+eps = LOL 0 []
+
+-- Smart constructor for LOL a, establishes invariant
+lol :: [a] -> LOL a
+lol xs = LOL (length xs) xs
+
+-- Concatenation of LOLs, preserves invariant
+dot :: LOL a -> LOL a -> LOL a
+dot xs (LOL 0 _) = xs                            -- special case, for efficiency
+dot (LOL n xs) (LOL m ys) = LOL (n+m) (xs++ys)   -- general case
+
+-- Reverse of LOLs, preserves invariant
+rev :: LOL a -> LOL a
+rev (LOL n xs) = LOL n (reverse xs)
+
+
+---------------- Languages
+
+-- Normalized lists of LOLs (aka "languages"), possibly infinite
+-- Invariant: xs :: Lang a implies xs is sorted with no duplicates
+type Lang a = [LOL a]
+
+
+-- Smart constructor for (finite) languages, establishes invariant
+lang :: Ord a => [[a]] -> Lang a
+lang xs = norm $ map lol xs
+
+-- Membership for languages (infinite lists satisfying invariant included)
+memb :: Ord a => LOL a -> Lang a -> Bool
+memb _ [] = False
+memb x (y:ys) =
+  case compare x y of
+    LT -> False
+    EQ -> True
+    GT -> memb x ys
+                           
+-- Merge of langages (aka "union")
+merge :: Ord a => Lang a -> Lang a -> Lang a
+merge [] ys = ys
+merge xs [] = xs
+merge xs@(x:xr) ys@(y:yr) =
+  case compare x y of
+    LT -> x : merge xr ys
+    EQ -> x : merge xr yr
+    GT -> y : merge xs yr
+
+-- Concatenation of languages
+cat :: Ord a => Lang a -> Lang a -> Lang a
+cat [] _ = []
+cat _ [] = []
+cat (x:xr) ys@(y:yr) = dot x y : merge (map (dot x) yr) (cat xr ys)
+
+-- Kleene star of a language
+kstar :: Ord a => Lang a -> Lang a
+kstar [] = [eps]
+kstar (LOL 0 []:xr) = kstar xr
+kstar xs = eps : cat xs (kstar xs)
+
+-- Left quotient of a language by a string
+leftq :: Ord a => LOL a -> Lang a -> Lang a
+leftq _ [] = []
+leftq w@(LOL n xs) (LOL m ys:yss)
+  | n <= m = case stripPrefix xs ys of
+      Nothing -> leftq w yss
+      Just zs -> LOL (m-n) zs : leftq w yss
+  | otherwise = leftq w yss
+        
+-- Nonempty part of a language
+nep [] = []
+nep (LOL 0 [] : xs) = xs  -- remove empty string, which must be first
+nep xs = xs
+
+
+-- All strings of length <= n over an alphabet sigma, in LOL order
+-- Useful for testing
+strings :: Int -> [Char] -> [String]
+strings n sigma = concat [strs i | i <- [0..n]] where
+  strs 0 = [""]
+  strs n = [a:xs | a <- sort sigma, xs <- strs (n-1)]
+
+
+---- Regular expressions and the languages they denote 
+data RegExp = Empty                -- Empty language
+            | Let Char             -- Single letter language
+            | Union RegExp RegExp  -- Union
+            | Cat RegExp RegExp    -- Concatenation
+            | Star RegExp          -- Kleene star
+            deriving (Show, Eq)
+
+-- Compact display form for RegExp
+newtype Compact = Compact RegExp
+
+instance (Show Compact) where    -- use precedence to minimize parentheses
+  showsPrec d (Compact r) = sp d r where
+    sp d Empty         = showString "0"
+    sp d (Let c)       = showString [c]
+    sp d (Union r1 r2) = showParen (d > 6) $  -- prec(Union) = 6
+                         sp 6 r1 .
+                         showString "+" .
+                         sp 6 r2
+    sp d (Cat r1 r2)   = showParen (d > 7) $  -- prec(Cat) = 7
+                         sp 7 r1 .
+                         sp 7 r2
+    sp d (Star Empty)  = showString "1"
+    sp d (Star r1)     = sp 9 r1 .     -- prec(Star) = 8
+                         showString "*"
+
+
+-- Quick and dirty postfix RegExp parser, gives non-exaustive match on error
+-- Allows 1 to be used as an input form for 0*
+toRE :: String -> RegExp
+toRE w = go w [] where
+  go [] [r]              = r
+  go ('+':xs) (r2:r1:rs) = go xs (Union r1 r2:rs)
+  go ('.':xs) (r2:r1:rs) = go xs (Cat r1 r2:rs)
+  go ('*':xs) (r:rs)     = go xs (Star r:rs)
+  go ('0':xs) rs         = go xs (Empty:rs)
+  go ('1':xs) rs         = go xs (Star Empty:rs)
+  go (x:xs) rs           = go xs (Let x:rs)   -- everything else is a letter
+
+
+-- The language associated to (aka denotation of) a regular expression: [[r]]
+lang_of :: RegExp -> Lang Char
+lang_of Empty = []
+lang_of (Let a) = lang [[a]]
+lang_of (Union r1 r2) = merge (lang_of r1) (lang_of r2)
+lang_of (Cat r1 r2) = cat (lang_of r1) (lang_of r2)
+lang_of (Star r1) = kstar (lang_of r1)
+
+
+-- The one-string and finite languages of Theorem 3.2.
+onestr :: String -> RegExp
+onestr [] = Star Empty
+onestr [x] = Let x
+onestr (x:xs) = Cat (Let x) (onestr xs)
+
+finite :: [String] -> RegExp
+finite [] = Empty
+finite [w] = onestr w
+finite (w:ws) = Union (onestr w) (finite ws)
+
+
+-- Some recursive functions on regular expressions
+
+-- Empty
+emptyr :: RegExp -> Bool
+emptyr Empty = True
+emptyr (Let _) = False
+emptyr (Union r1 r2) = emptyr r1 && emptyr r2
+emptyr (Cat r1 r2) = emptyr r1 || emptyr r2
+emptyr (Star r1) = False
+  
+-- Unitary
+unitr :: RegExp -> Bool
+unitr Empty = False
+unitr (Let _) = False
+unitr (Union r1 r2) =
+  unitr r1 && (emptyr r2 || unitr r2) || emptyr r1 && unitr r2
+unitr (Cat r1 r2) = unitr r1 && unitr r2
+unitr (Star r1) = emptyr r1 || unitr r1
+  
+-- Bypassable
+bypr :: RegExp -> Bool
+bypr Empty = False
+bypr (Let _) = False
+bypr (Union r1 r2) = bypr r1 || bypr r2
+bypr (Cat r1 r2) = bypr r1 && bypr r2
+bypr (Star r1) = True
+  
+-- Infinite
+infr :: RegExp -> Bool
+infr Empty = False
+infr (Let _) = False
+infr (Union r1 r2) = infr r1 || infr r2
+infr (Cat r1 r2) =
+  infr r1 && not (emptyr r2) || not (emptyr r1) && infr r2
+infr (Star r1) = not (emptyr r1) && not (unitr r1)
+  
+-- Reverse
+revr :: RegExp -> RegExp
+revr Empty = Empty
+revr (Let c) = Let c
+revr (Union r1 r2) = Union (revr r1) (revr r2)
+revr (Cat r1 r2) = Cat (revr r2) (revr r1)
+revr (Star r1) = Star (revr r1)
+  
+-- Left quotient (by a letter)
+leftqr :: Char -> RegExp -> RegExp
+leftqr s Empty = Empty
+leftqr s (Let c) = if s == c then Star Empty else Empty
+leftqr s (Union r1 r2) = Union (leftqr s r1) (leftqr s r2)
+leftqr s (Cat r1 r2) | bypr r1 = Union (Cat (leftqr s r1) r2) (leftqr s r2)
+                     | otherwise = Cat (leftqr s r1) r2
+leftqr s (Star r1) = Cat (leftqr s r1) (Star r1)
+
+-- Non-empty part
+nepr :: RegExp -> RegExp
+nepr Empty = Empty
+nepr (Let c) = Let c
+nepr (Union r1 r2) = Union (nepr r1) (nepr r2)
+nepr (Cat r1 r2) = Union (Cat (nepr r1) r2) (Cat r1 (nepr r2))
+nepr (Star r1) = Cat (nepr r1) (Star r1)
+
+
+-- Matching algorithm 1
+match1 :: RegExp -> String -> Bool
+match1 Empty _ = False
+match1 (Let c) w = w == [c]
+match1 (Union r1 r2) w = match1 r1 w || match1 r2 w
+match1 (Cat r1 r2) w = any (\(w1,w2) -> match1 r1 w1 && match1 r2 w2) (splits w)
+match1 (Star r) w = null w ||
+  any (\(w1,w2) -> match1 r w1 && match1 (Star r) w2) (tail $ splits w)
+
+-- Matching algorithm 2
+match2 :: RegExp -> String -> Bool
+match2 r w = m [r] False w where
+  m :: [RegExp] -> Bool -> String -> Bool  -- for c, False is 0, True is 1
+  m [] c w = not c && null w
+  m (Empty : rs) c w = False
+  m (Let a : rs) c [] = False
+  m (Let a : rs) c (x:xs) = a == x && m rs False xs
+  m (Union r1 r2 : rs) c w = m (r1:rs) c w || m (r2:rs) c w
+  m (Cat r1 r2 : rs) c w = m (r1:r2:rs) c w || c && bypr r1 && m (r2:rs) c w
+  m (Star r1 : rs) c w = not c && m rs c w || m (r1:Star r1:rs) True w
+
+
+-- Finite State Machines ------------------------------------------------------
+
+-- Finite state machines, indexed by the type of their states
+-- M = (states, start, finals, transitions)  
+type FSM a = ([a], a, [a], a -> Char -> a)
+
+-- Generalized * construction
+star :: (a -> Char -> a) -> (a -> [Char] -> a)
+star = foldl'
+
+accept1 :: Eq a => FSM a -> [Char] -> Bool
+accept1 (_, s, fs, d) w = elem (star d s w) fs
+
+accept2_aux :: Eq a => FSM a -> a -> [Char] -> Bool
+accept2_aux m@(_, _, fs, _) q [] = elem q fs
+accept2_aux m@(_, _, _, d) q (a:w) = accept2_aux m (d q a) w
+
+accept2 :: Eq a => FSM a -> [Char] -> Bool
+accept2 m@(_, s, _, _) w = accept2_aux m s w
+
+-- Machine that accepts the empty language
+emptyFSM :: FSM Int
+emptyFSM = ([0], 0, [], d) where
+  d _ _ = 0
+
+-- Machine that accepts the language {"a"} where a in sigma
+letterFSM :: Char -> FSM Int
+letterFSM x = ([0,1,2], 0, [1], d) where
+  d q a = if q == 0 && a == x then 1 else 2
+
+-- Machine that accepts the `op` of the languages accepted by m1 and m2
+opFSM :: (Eq a, Eq b) => (Bool -> Bool -> Bool) -> FSM a -> FSM b -> FSM (a, b)
+opFSM op (qs1, s1, fs1, d1) (qs2, s2, fs2, d2) = (qs, s, fs, d) where
+  qs = cart qs1 qs2
+  s  = (s1, s2)
+  fs = [q | q@(q1,q2) <- qs, (q1 `elem` fs1) `op` (q2 `elem` fs2)]
+  d (q1, q2) a = (d1 q1 a, d2 q2 a)
+
+-- Union construction on machines
+unionFSM :: (Eq a, Eq b) => FSM a -> FSM b -> FSM (a,b)
+unionFSM = opFSM (||)
+
+-- Intersection construction on machines
+intersFSM :: (Eq a, Eq b) => FSM a -> FSM b -> FSM (a,b)
+intersFSM = opFSM (&&)
+
+-- Symmetric difference (exclusive-or) construction on machines
+symdFSM :: (Eq a, Eq b) => FSM a -> FSM b -> FSM (a,b)
+symdFSM = opFSM (/=)
+
+-- Set difference construction on machines
+diffFSM :: (Eq a, Eq b) => FSM a -> FSM b -> FSM (a,b)
+diffFSM = opFSM (\b1 b2 -> b1 && not b2)
+
+
+-- Unary set closure (where "set" = normalized list)
+-- uclosure xs g == smallest set containing xs and closed under g
+uclosure :: Ord a => [a] -> (a -> [a]) -> [a]
+uclosure xs g = sort $ stable $ iterate close (xs, []) where
+  stable ((fr,xs):rest) = if null fr then xs else stable rest
+  close (fr, xs) = (fr', xs') where
+    xs' = fr ++ xs
+    fr' = norm $ filter (`notElem` xs') $ concatMap g fr
+
+-- reachable m == the part of m that is reachable from the start state
+reachable :: Ord a => FSM a -> FSM a
+reachable (qs, s, fs, d) = (qs', s, fs', d) where
+  qs' = uclosure [s] (\q -> map (d q) sigma)
+  fs' = filter (`elem` fs) qs'
+
+
+-- Nondeterministic FSMs, indexed by their type of state
+-- Prerequisite: qs and ss are normalized and the output of d is normalized
+-- M = (states, starts, finals, transitions)  
+type Trans a = a -> Char -> [a]
+type NFSM a = ([a], [a], [a], Trans a)
+
+-- hat d qs a == set of all transitions possible from qs on a
+hat :: Ord a => Trans a -> [a] -> Char -> [a]
+hat d qs a = norm $ concat [d q a | q <- qs]
+
+-- hat_star d qs w == normalized list of transitions possible from qs on w
+hat_star :: Ord a => Trans a -> [a] -> [Char] -> [a]
+hat_star = star . hat
+
+-- nacc m w == m accepd the string w
+nacc :: Ord a => NFSM a -> [Char] -> Bool
+nacc (qs, ss, fs, d) w = overlap (hat_star d ss w) fs
+
+
+-- Nondeterministic FSMs with epsilon moves, indexed by their type of state
+-- qs and ss are normalized and the output of d is normalized
+-- M = (states, starts, finals, transitions, epsilon-moves)
+type Eps a = [(a, a)]
+type EFSM a = ([a], [a], [a], Trans a, Eps a)
+
+-- eclose es qs = Epsilon closure of qs wrt to epsilon moves in es
+eclose :: Ord a => Eps a -> [a] -> [a]
+eclose es qs = uclosure qs (\q -> [q2 | (q1,q2) <- es, q1 == q])
+  
+-- eap_has d es qs a == eclosure of transitions possible from qs on a
+ehat :: Ord a => (Trans a, Eps a) -> [a] -> Char -> [a]
+ehat (d,es) qs a = eclose es $ norm $ concat [d q a | q <- qs]
+
+-- ehat_star d es q w == eclosure of transitions possible from qs on w
+ehat_star :: Ord a => (Trans a, Eps a) -> [a] -> [Char] -> [a]
+ehat_star = star . ehat
+
+eacc :: Ord a => EFSM a -> [Char] -> Bool
+eacc (qs, ss, fs, d, es) w = overlap (ehat_star (d,es) (eclose es ss) w) fs
+
+
+-- Easy conversion from FSM to NFSM
+fsm_to_nfsm :: Eq a => FSM a -> NFSM a
+fsm_to_nfsm (qs, s, fs, d) = (qs, [s], fs, d') where
+  d' q a = [d q a]
+
+-- Conversion from NFSM to FSM by the "subset construction"
+nfsm_to_fsm :: Ord a => NFSM a -> FSM [a]
+nfsm_to_fsm (qs1, ss1, fs1, d1) = (qs, s, fs, d) where
+  qs = power qs1
+  s  = ss1
+  fs = [x | x <- qs, overlap x fs1]
+  d x a = hat d1 x a
+
+-- Similar conversion from EFSM to FSM using epsilon closure
+efsm_to_fsm :: Ord a => EFSM a -> FSM [a]
+efsm_to_fsm (qs1, ss1, fs1, d1, es1) = (qs, s, fs, d) where
+  qs = power qs1
+  s  = eclose es1 ss1
+  fs = [x | x <- qs, overlap x fs1]
+  d x a = ehat (d1,es1) x a
+
+regexp1 :: RegExp
+regexp1 = Star (Union (Let 'b') (Cat (Let 'a') (Cat (Let 'b') (Let 'b'))))
+
+regexp2 = Cat (Star (Cat (Star (Let 'b')) (Cat (Let 'a') (Star (Let 'b'))))) (Star (Let 'b'))
+
+
+
+--question 1
+abbFSM :: FSM Int
+abbFSM = (qs, ss, fs, d) where
+    qs = [0, 1, 2, 3]
+    ss = 0
+    fs = [0]
+    d state char = case (state, char) of
+        (0, 'a') -> 1
+        (0, 'b') -> 0
+        (1, 'b') -> 2
+        (2, 'b') -> 0
+        (1, 'a') -> 3
+        (2, 'a') -> 3
+        (_,  _)  -> 3
+
+
+--question 2
+evenAsFSM :: FSM Int
+evenAsFSM = (qs, ss, fs, d) where
+    qs = [0, 1]                          
+    ss = 0                                
+    fs = [0]                              
+    d state char = case (state, char) of 
+        (0, 'a') -> 1                     
+        (1, 'a') -> 0                    
+        (0, 'b') -> 0                    
+        (1, 'b') -> 1                     
+        (_,  _)  -> state 
+
+--question 3
+atLeastFSM :: FSM Int
+atLeastFSM = (qs, ss, fs, d) where
+    qs = [0,1,2,3]
+    ss = 0
+    fs = [3]
+    d state char = case (state, char) of
+        (0, 'a') -> 1
+        (0, 'b') -> 2
+        (1, 'b') -> 3
+        (1, 'a') -> 1
+        (2, 'a') -> 3
+        (2, 'b') -> 2
+        (3, _)   -> 3
+        (_,   _) -> state
+
+--question 4
+adjFSM :: FSM Int
+adjFSM = (qs, ss, fs, d) where
+    qs = [0, 1, 2, 3]
+    ss = 0
+    fs = [0,1,2]
+    d state char = case (state, char) of
+        (0, 'a') -> 1   
+        (0, 'b') -> 2   
+        (1, 'b') -> 2   
+        (1, 'a') -> 3   
+        (2, 'a') -> 1   
+        (2, 'b') -> 3   
+        (3, 'a') -> 3   
+        (3, 'b') -> 3   
+        _        -> state
+
+--question 5
+noTripleBFSM :: FSM Int
+noTripleBFSM = (qs, ss, fs, d) where
+    qs = [0, 1, 2, 3]
+    ss = 0
+    fs = [0, 1, 2]
+    d state char = case (state, char) of
+        (0, 'a') -> 0
+        (0, 'b') -> 1
+        (1, 'a') -> 0
+        (1, 'b') -> 2         
+        (2, 'a') -> 0         
+        (2, 'b') -> 3         
+        (3, _)   -> 3         
+        (_,   _) -> state 
+
+--question 6
+noABAFSM :: FSM Int
+noABAFSM = (qs, ss, fs, d) where
+    qs = [0, 1, 2, 3]
+    ss = 0
+    fs = [0, 1, 2]
+    d state char = case (state, char) of 
+        (0, 'a') -> 1
+        (0, 'b') -> 0
+        (1, 'a') -> 1  
+        (1, 'b') -> 2
+        (2, 'a') -> 3
+        (2, 'b') -> 0  
+        (3, _)   -> 3  
+        (_,   _) -> state  
+
+--question 7
+aaBBFSM :: FSM Int
+aaBBFSM  = (qs, ss, fs, d) where
+    qs = [0, 1, 2, 3, 4]  
+    ss = 0                
+    fs = [0, 1, 2, 3]     
+    d state char = case (state, char) of
+        (0, 'a') -> 0      
+        (0, 'b') -> 1      
+        (1, 'a') -> 0      
+        (1, 'b') -> 2      
+        (2, 'a') -> 3      
+        (2, 'b') -> 2      
+        (3, 'a') -> 4      
+        (3, 'b') -> 2      
+        (4, _)   -> 4      
+        (_,   _) -> state  
+
+--question 8
+evenABFSM :: FSM Int
+evenABFSM = (qs, ss, fs, d) where
+    qs = [0, 1, 2, 3]  
+    ss = 0             
+    fs = [0]           
+    d state char = case (state, char) of
+        (0, 'a') -> 2  
+        (0, 'b') -> 1  
+        (1, 'a') -> 3  
+        (1, 'b') -> 0  
+        (2, 'a') -> 0  
+        (2, 'b') -> 3  
+        (3, 'a') -> 1  
+        (3, 'b') -> 2  
+        (_,   _) -> state  
+
+
+exactly :: String -> FSM Int
+exactly w1 = (qs, ss, fs, d) where
+    len = length w1
+    qs = [0..len]  
+    ss = 0  
+    fs = [len]  
+    d state char 
+        | state < len && char == w1 !! state = state + 1  
+        | otherwise = len + 1                    
+
+
+endsin :: String -> FSM Int
+endsin w1 = (qs, ss, fs, d) where
+    len = length w1
+    qs = [0..len]  
+    ss = 0         
+    fs = [len]     
+
+    d state char = 
+        case drop state w1 of
+            (x:xs) -> if char == x then state + 1 else len + 1  
+            []     -> len + 1
+
+
+avoids w1 = (qs, ss, fs, d) where
+    len = length w1
+    qs = [0..len]  
+    ss = 0         
+    fs = [0..len-1]  
+
+    d state char 
+        | state < len && char == w1 !! state = state + 1    
+        | state < len && char /= w1 !! state = checkReset state char 0  
+        | otherwise = len   
+
+    checkReset state char idx
+        | idx < state && isInfixOf (take idx w1 ++ [char]) w1 = idx + 1  
+        | idx < state = checkReset state char (idx + 1)  
+        | otherwise = 0  
+
+
+
+{-
+1)
+ghci> testAbb = accept1 abbFSM "abb"
+ghci> testAbb
+True
+ "aaaba"
+ghci> testAbb
+False
+
+ghci> and [match2 regexp1 w == accept2 abbFSM w | w <- strings 10 "ab"]
+True
+
+2)
+ "aabbbbbaa"
+ghci> testEvenA
+True
+ "abbbbb"
+ghci> testEvenA
+False
+
+3)
+ "aaaaaa"
+ghci> test3
+False
+ "aaaaaab"
+ghci> test3
+True
+
+4)
+ "ababaaaaa"
+ghci> test4
+False
+ "ababababa"
+ghci> test4
+True
+
+5)
+ "ababababababba"
+ghci> test5
+True
+ "abbba"
+ghci> test5
+False
+
+ghci> and [match2 regexp4 w == accept2 adjFSM w | w <- strings 10 "ab"]
+True
+
+6)
+ "aaaabbbbbaa"
+ghci> test6
+True
+ "aaabaa"
+ghci> test6
+False
+
+7)
+ "aabbaa"
+ghci> test7
+False
+ "aaaaabbbbba"
+ghci> test7
+True
+
+8)
+ "aabbaa"
+ghci> test8
+True
+"aabba"
+ghci> test8
+False
+
+1)exactly
+ghci> abbMachine = exactly "abb"
+
+ghci> test = accept1 abbMachine "abb"
+True
+ghci> test = accept1 abbMachine "abbbbbbbbb"
+False
+
+
+
+
+-}
